@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>グローイングフィッシュ</title>
+    <style>
+        body {
+            display: flex;
+            flex-direction: column; /*要素を縦に並べる*/
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            background-color: #f0f0f0; /* 背景色を少し薄く */
+            font-family: 'Arial', sans-serif; /* フォント指定 */
+        }
+        #gameCanvas {
+            border: 2px solid #333; /* 枠線を濃く */
+            background-color: #87CEEB; /* 仕様書通りのスカイブルー */
+            border-radius: 10px; /* 角を丸く */
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1); /* 影を追加 */
+            touch-action: none; /* スマホでのスクロールを防止 */
+        }
+        #scoreBoard {
+            font-size: 24px;
+            color: #333; /* 文字色を濃く */
+            margin-bottom: 10px; /* キャンバスとの間隔 */
+            padding: 10px 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        #gameOverScreen {
+            display: none; /* 初期状態では非表示 */
+            position: absolute; /* キャンバスに重ねる */
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: rgba(0, 0, 0, 0.75); /* 仕様書より少し濃く */
+            color: white;
+            padding: 30px; /* パディングを増やす */
+            border-radius: 15px; /* 角をさらに丸く */
+            text-align: center;
+            box-shadow: 0 6px 12px rgba(0,0,0,0.2); /* 影を強調 */
+            z-index: 10; /* キャンバスより手前に表示 */
+        }
+        #gameOverScreen h2 {
+            margin-top: 0;
+            font-size: 28px; /* 見出しのフォントサイズ */
+        }
+        #gameOverScreen p {
+            font-size: 20px; /* メッセージのフォントサイズ */
+            margin-bottom: 25px; /* ボタンとの間隔 */
+        }
+        #restartButton {
+            padding: 12px 25px; /* パディング調整 */
+            font-size: 18px;
+            color: white;
+            background-color: #007bff; /* 仕様書通りの青 */
+            border: none;
+            border-radius: 8px; /* 角を丸く */
+            cursor: pointer;
+            transition: background-color 0.3s ease; /* ホバーエフェクト */
+        }
+        #restartButton:hover {
+            background-color: #0056b3; /* ホバー時の色を濃く */
+        }
+    </style>
+</head>
+<body>
+    <div id="scoreBoard">スコア: 2</div>
+    <canvas id="gameCanvas"></canvas>
+    <div id="gameOverScreen">
+        <h2>ゲームオーバー！</h2>
+        <p id="finalScoreMessage">最終スコア: 2</p>
+        <button id="restartButton">もう一度遊ぶ</button>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const scoreBoard = document.getElementById('scoreBoard');
+        const gameOverScreen = document.getElementById('gameOverScreen');
+        const finalScoreMessage = document.getElementById('finalScoreMessage');
+        const restartButton = document.getElementById('restartButton');
+
+        // キャンバスサイズ設定
+        const CANVAS_WIDTH = 800;
+        const CANVAS_HEIGHT = 600;
+        canvas.width = CANVAS_WIDTH;
+        canvas.height = CANVAS_HEIGHT;
+
+        // ★変更点: プレイヤーの初期半径を小さく
+        const PLAYER_INITIAL_NUMBER = 2;
+        const PLAYER_INITIAL_RADIUS = 15; // 以前は20
+        const PLAYER_COLOR = "#007bff";
+        const ENEMY_COLORS = ["#28a745", "#ffc107", "#dc3545", "#17a2b8", "#6c757d"];
+        const MAX_ENEMIES = 10;
+        const ENEMY_SPAWN_INTERVAL = 2000; // ms
+
+        // ★変更点: 敵の魚の基本サイズを小さく調整
+        const ENEMY_MIN_BASE_RADIUS = 4; // 数字1あたりの最小半径のベース (以前はENEMY_MIN_SIZE_PER_NUMBER = 5)
+        const ENEMY_MAX_BASE_RADIUS = 8; // 数字1あたりの最大半径のベース (以前はENEMY_MAX_SIZE_PER_NUMBER = 12)
+        const ENEMY_RADIUS_PER_NUMBER = 0.6; // 数字1ごとに増える半径の量 (以前は直接計算)
+
+        const PLAYER_SIZE_INCREASE_FACTOR = 0.2; // 半径増加係数 (微調整)
+
+        let player;
+        let enemies = [];
+        let score = PLAYER_INITIAL_NUMBER;
+        let gameOver = false;
+        let enemySpawnTimer = 0;
+        let mouse = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2 };
+        let touch = { x: CANVAS_WIDTH / 2, y: CANVAS_HEIGHT / 2, active: false };
+
+
+        // 魚クラス
+        class Fish {
+            constructor(x, y, radius, number, color) {
+                this.x = x;
+                this.y = y;
+                this.radius = radius; // このradiusは当たり判定やおおよそのサイズ感に使う
+                this.number = number;
+                this.color = color;
+                this.facingRight = true; // プレイヤーは常に右向き、敵は進行方向による
+            }
+
+            // ★変更点: 魚の形を描画するメソッド
+            draw() {
+                ctx.save(); // 現在の描画状態を保存
+                ctx.translate(this.x, this.y); // 魚の中心を原点に移動
+
+                // 魚の向きに合わせて回転 (敵のみ)
+                if (!this.facingRight) {
+                    ctx.scale(-1, 1); // 左右反転
+                }
+
+                // 胴体 (楕円っぽく)
+                ctx.beginPath();
+                ctx.ellipse(0, 0, this.radius * 1.2, this.radius * 0.8, 0, 0, Math.PI * 2); // 横長の楕円
+                ctx.fillStyle = this.color;
+                ctx.fill();
+                ctx.closePath();
+
+                // 尾びれ (三角形)
+                ctx.beginPath();
+                ctx.moveTo(-this.radius * 1.1, 0); // 胴体の後端あたり
+                ctx.lineTo(-this.radius * 1.8, -this.radius * 0.6);
+                ctx.lineTo(-this.radius * 1.8, this.radius * 0.6);
+                ctx.closePath();
+                ctx.fillStyle = this.color; // 胴体と同じ色で少し暗くしても良い
+                ctx.fill();
+                
+                // 目 (オプション)
+                ctx.beginPath();
+                ctx.arc(this.radius * 0.6, -this.radius * 0.2, this.radius * 0.15, 0, Math.PI * 2);
+                ctx.fillStyle = "white";
+                ctx.fill();
+                ctx.closePath();
+                ctx.beginPath();
+                ctx.arc(this.radius * 0.65, -this.radius * 0.22, this.radius * 0.08, 0, Math.PI * 2);
+                ctx.fillStyle = "black";
+                ctx.fill();
+                ctx.closePath();
+
+
+                ctx.restore(); // 描画状態を元に戻す
+
+                // 数字の描画 (元の座標系で)
+                ctx.fillStyle = "white";
+                let fontSize = Math.max(8, Math.min(this.radius * 0.7, 30)); // サイズ調整
+                ctx.font = `bold ${fontSize}px Arial`;
+                ctx.textAlign = "center";
+                ctx.textBaseline = "middle";
+                // 魚の向きに関わらず、魚の中心に数字を表示
+                ctx.fillText(this.number, this.x, this.y);
+            }
+        }
+
+        // プレイヤークラス
+        class Player extends Fish {
+            constructor(x, y, radius, number, color) {
+                super(x, y, radius, number, color);
+                this.facingRight = true; // プレイヤーは常に右向きとする
+            }
+
+            update() {
+                let targetX, targetY;
+                if (touch.active) {
+                    targetX = touch.x;
+                    targetY = touch.y;
+                } else {
+                    targetX = mouse.x;
+                    targetY = mouse.y;
+                }
+
+                const dx = targetX - this.x;
+                const dy = targetY - this.y;
+                const speedFactor = Math.min(1, Math.sqrt(dx*dx + dy*dy) / 100) * 0.15;
+                this.x += dx * speedFactor;
+                this.y += dy * speedFactor;
+
+                this.x = Math.max(this.radius, Math.min(CANVAS_WIDTH - this.radius, this.x));
+                this.y = Math.max(this.radius, Math.min(CANVAS_HEIGHT - this.radius, this.y));
+
+                this.draw();
+            }
+
+            eat(enemy) {
+                this.number += enemy.number;
+                this.radius += Math.sqrt(enemy.number) * PLAYER_SIZE_INCREASE_FACTOR * 3; // サイズ増加係数を調整
+                score = this.number;
+                updateScoreBoard();
+            }
+        }
+
+        // 敵クラス
+        class Enemy extends Fish {
+            constructor(x, y, radius, number, color, speedX) {
+                super(x, y, radius, number, color);
+                this.speedX = speedX;
+                this.facingRight = speedX > 0; // 進行方向によって向きを設定
+            }
+
+            update() {
+                this.x += this.speedX;
+                // 向きを再設定（もし速度が途中で変わるようなゲームにするなら必要）
+                // this.facingRight = this.speedX > 0; 
+                this.draw();
+            }
+        }
+
+        // 初期化関数
+        function init() {
+            player = new Player(CANVAS_WIDTH / 2, CANVAS_HEIGHT / 2, PLAYER_INITIAL_RADIUS, PLAYER_INITIAL_NUMBER, PLAYER_COLOR);
+            enemies = [];
+            score = PLAYER_INITIAL_NUMBER;
+            gameOver = false;
+            enemySpawnTimer = 0;
+            lastTime = 0;
+            updateScoreBoard();
+            gameOverScreen.style.display = 'none';
+            if (animationFrameId) cancelAnimationFrame(animationFrameId);
+            gameLoop();
+        }
+
+        // スコア表示更新
+        function updateScoreBoard() {
+            scoreBoard.textContent = `スコア: ${score}`;
+        }
+
+        // 敵を生成する関数
+        function spawnEnemy() {
+            const playerNumber = player.number;
+            const numberMin = Math.max(1, Math.floor(playerNumber * 0.4)); // 少し弱めの敵も出やすく
+            const numberMax = Math.floor(playerNumber * 1.3) + 2; // 大きすぎる敵は出にくく
+
+            const enemyNumber = Math.floor(Math.random() * (numberMax - numberMin + 1)) + numberMin;
+
+            // ★変更点: 敵の半径計算を変更
+            const enemyRadiusBase = Math.random() * (ENEMY_MAX_BASE_RADIUS - ENEMY_MIN_BASE_RADIUS) + ENEMY_MIN_BASE_RADIUS;
+            const enemyRadius = Math.max(8, enemyRadiusBase + enemyNumber * ENEMY_RADIUS_PER_NUMBER); // 最低半径を8に
+
+            const spawnFromLeft = Math.random() < 0.5;
+            const x = spawnFromLeft ? 0 - enemyRadius * 1.5 : CANVAS_WIDTH + enemyRadius * 1.5; // 画面外に余裕をもってスポーン
+            const y = Math.random() * (CANVAS_HEIGHT - enemyRadius * 2) + enemyRadius;
+            const color = ENEMY_COLORS[Math.floor(Math.random() * ENEMY_COLORS.length)];
+            const speedMagnitude = (Math.random() * 1.0 + 0.8); // 0.8から1.8の速度 (少し遅めに調整)
+            const speed = speedMagnitude * (spawnFromLeft ? 1 : -1);
+
+            const newEnemy = new Enemy(x, y, enemyRadius, enemyNumber, color, speed);
+            enemies.push(newEnemy);
+        }
+
+        // 衝突判定関数 (魚の形を考慮して当たり判定を少し調整しても良いが、ここでは半径ベースを維持)
+        function checkCollision(fish1, fish2) {
+            const dx = fish1.x - fish2.x;
+            const dy = fish1.y - fish2.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            // 当たり判定の半径を少し小さめに見積もる (見た目の魚の幅に合わせる)
+            return distance < (fish1.radius * 0.9 + fish2.radius * 0.9); 
+        }
+
+        // ゲームオーバー処理
+        function handleGameOver() {
+            gameOver = true;
+            finalScoreMessage.textContent = `最終スコア: ${score}`;
+            gameOverScreen.style.display = 'flex';
+            cancelAnimationFrame(animationFrameId);
+        }
+        
+        let animationFrameId; 
+        let lastTime = 0; 
+
+        // ゲームループ
+        function gameLoop(timestamp) {
+            if (gameOver) return;
+
+            const deltaTime = timestamp - lastTime;
+            lastTime = timestamp;
+
+            ctx.clearRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT); 
+
+            player.update();
+
+            if (!isNaN(deltaTime)){ 
+                enemySpawnTimer += deltaTime;
+            }
+
+            if (enemySpawnTimer > ENEMY_SPAWN_INTERVAL && enemies.length < MAX_ENEMIES) {
+                spawnEnemy();
+                enemySpawnTimer = 0;
+            }
+
+            for (let i = enemies.length - 1; i >= 0; i--) {
+                const enemy = enemies[i];
+                enemy.update();
+
+                if (checkCollision(player, enemy)) {
+                    if (player.number > enemy.number) {
+                        player.eat(enemy);
+                        enemies.splice(i, 1); 
+                    } else {
+                        handleGameOver();
+                        return; 
+                    }
+                }
+
+                // 画面外に出た敵を削除 (魚の幅を考慮して判定を少し調整)
+                if ((enemy.speedX < 0 && enemy.x + enemy.radius * 1.2 < 0) || 
+                    (enemy.speedX > 0 && enemy.x - enemy.radius * 1.2 > CANVAS_WIDTH)) {
+                    enemies.splice(i, 1);
+                }
+            }
+            animationFrameId = requestAnimationFrame(gameLoop);
+        }
+
+        // マウスイベントリスナー
+        canvas.addEventListener('mousemove', (event) => {
+            const rect = canvas.getBoundingClientRect();
+            mouse.x = event.clientX - rect.left;
+            mouse.y = event.clientY - rect.top;
+            touch.active = false; 
+        });
+
+        // タッチイベントリスナー
+        canvas.addEventListener('touchstart', (event) => {
+            event.preventDefault(); 
+            const rect = canvas.getBoundingClientRect();
+            touch.x = event.touches[0].clientX - rect.left;
+            touch.y = event.touches[0].clientY - rect.top;
+            touch.active = true;
+        }, { passive: false });
+
+        canvas.addEventListener('touchmove', (event) => {
+            event.preventDefault();
+            if (event.touches.length > 0) {
+                const rect = canvas.getBoundingClientRect();
+                touch.x = event.touches[0].clientX - rect.left;
+                touch.y = event.touches[0].clientY - rect.top;
+                touch.active = true;
+            }
+        }, { passive: false });
+
+        restartButton.addEventListener('click', () => {
+            init();
+        });
+
+        init();
+    </script>
+</body>
+</html>
